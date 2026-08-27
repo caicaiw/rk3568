@@ -99,6 +99,50 @@ $$
 - $C$：类别数量；
 - 每个 bbox 的 5 个值：$(x,y,w,h,c)$。
 
+### 3.1 五个参数分别相对于什么
+
+YOLOv1 不直接输出像素坐标。$(x,y,w,h)$ 都是相对量，但它们参照的范围不同：
+
+| 参数 | 含义 | 参照范围 |
+|---|---|---|
+| $x$ | bbox 中心相对于负责 cell 左边界的水平偏移 | 当前 cell 的宽度，目标值通常在 $[0,1)$ |
+| $y$ | bbox 中心相对于负责 cell 上边界的垂直偏移 | 当前 cell 的高度，目标值通常在 $[0,1)$ |
+| $w$ | bbox 的相对宽度 | 整张输入图片的宽度 |
+| $h$ | bbox 的相对高度 | 整张输入图片的高度 |
+| $c$ | bbox confidence | 是否有目标及定位质量，不是坐标 |
+
+因此：
+
+$$
+x=\frac{X_{center}-X_{cell\ left}}{W_{cell}},\qquad
+y=\frac{Y_{center}-Y_{cell\ top}}{H_{cell}}
+$$
+
+$$
+w=\frac{W_{box}}{W_{image}},\qquad
+h=\frac{H_{box}}{H_{image}}
+$$
+
+假设负责 cell 的列、行索引分别为 $col,row$，网格为 $S\times S$，输入图片为 $W_{image}\times H_{image}$，则可以还原为：
+
+$$
+X_{center}=\frac{col+x}{S}W_{image},\qquad
+Y_{center}=\frac{row+y}{S}H_{image}
+$$
+
+$$
+W_{box}=wW_{image},\qquad
+H_{box}=hH_{image}
+$$
+
+例如输入图片宽度为 700，网格为 $7\times7$，目标由列索引 3 的 cell 负责，且 $x=0.22$，那么：
+
+$$
+X_{center}=\frac{3+0.22}{7}\times700=322
+$$
+
+这里 $x$ 乘的是 **cell 宽度**来得到 cell 内距离，而 $w$ 乘的是 **整张图片宽度**来得到 bbox 实际宽度。两者不能混用。
+
 以 Pascal VOC 配置为例：
 
 $$
@@ -118,8 +162,6 @@ bbox 1: x1, y1, w1, h1, c1       5 个
 bbox 2: x2, y2, w2, h2, c2       5 个
 类别条件概率                       20 个
 ```
-
-YOLOv1 中，$x,y$ 是 bbox 中心相对于负责 cell 的局部偏移；$w,h$ 则相对于整张输入图片的宽高归一化。不能把四个坐标都理解成 cell 内坐标。
 
 同一 cell 的两个 bbox 各自拥有坐标和置信度，但**共享一组类别概率**。因此多个 bbox 是多个候选方案，不代表该 cell 能稳定表达多个不同类别的目标。这也是 YOLOv1 面对多个目标中心落入同一 cell 时的局限之一。
 
