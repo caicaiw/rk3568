@@ -30,6 +30,10 @@ YOLOv1 将整张图片划分为 `S × S` 个 grid cell。一个目标的 bbox �
 - 决定负责 cell 的是 bbox 中心点，而不是 bbox 覆盖范围；
 - 深层特征具有较大感受野，因此一个 cell 不只利用其格子范围内的像素。
 
+![YOLO 网格中 bbox 中心点的 cell 内相对偏移示意](images/yolo/grid-cell-offsets.png)
+
+*图：同一 grid cell 内，中心点可以用相对于 cell 左上角的 `(x, y)` 偏移表示。*
+
 ### 2.1 全图坐标、网格坐标与局部偏移
 
 假设目标中心相对于整张图片的归一化坐标是：
@@ -99,6 +103,10 @@ $$
 - `C`：类别数量；
 - 每个 bbox 的 5 个值：`(x, y, w, h, c)`。
 
+![YOLOv1 的 7×7×30 输出张量示意](images/yolo/yolov1-7x7x30-tensor.png)
+
+*图：YOLOv1 将每个 grid cell 的 30 个预测值组合为 `7 × 7 × 30` 输出张量。*
+
 ### 3.1 五个参数分别相对于什么
 
 YOLOv1 不直接输出像素坐标。`(x, y, w, h)` 都是相对量，但它们参照的范围不同：
@@ -134,6 +142,10 @@ $$
 W_{box}=wW_{image},\qquad
 H_{box}=hH_{image}
 $$
+
+![bbox 中心局部偏移与相对宽高示意](images/yolo/relative-box-size.png)
+
+*图：仅用于帮助区分参照范围：`x, y` 描述中心在负责 cell 内的偏移，`w, h` 描述 bbox 相对于整张输入图片的宽高。图中的 `44.8`、`44.8×2` 与所画网格/红框比例并不一致，不应作为数值推导依据；计算请以正文公式为准。*
 
 例如输入图片宽度为 700，网格为 `7 × 7`，目标由列索引 3 的 cell 负责，且 `x = 0.22`，那么：
 
@@ -172,6 +184,10 @@ $$
 $$
 
 个候选框。
+
+![YOLOv1 每个 cell 的 bbox 参数与类别输出布局](images/yolo/yolov1-output-layout.png)
+
+*图：YOLOv1 输出布局示意。图片底部红字仅供辅助观察，其中两处表述需以正文为准：`x, y` 相对于负责 cell，`w, h` 相对于整张输入图片；`c` 是 bbox confidence，而不是某个类别的置信度。*
 
 ## 4. bbox 置信度与类别得分
 
@@ -349,6 +365,10 @@ YOLOv5 的主要变化包括：
 | 定位损失 | 坐标平方误差 | IoU 系列损失 |
 | 工程实现 | 早期框架 | PyTorch、数据增强、迁移学习与多格式导出 |
 
+![早期 YOLOv5s 的 Backbone、Neck 与 Prediction 结构](images/yolo/yolov5s-architecture.png)
+
+*图：早期 YOLOv5s 结构示意，包括 Backbone、Neck 和三个 Prediction 分支。图中输入为 `608 × 608`，所以预测尺度是 `76 × 76`、`38 × 38` 和 `19 × 19`。*
+
 > YOLOv5 迭代版本较多，具体模块可能随版本变化。例如早期结构图常见 Focus、LeakyReLU 和 SPP，后续常见实现可能使用不同 Stem、SiLU 与 SPPF。理解主干、Neck、检测头和多尺度预测比死记某一版模块更重要。
 
 ## 9. YOLOv5 的三个检测尺度
@@ -372,6 +392,10 @@ YOLOv5 的主要变化包括：
 ## 10. FPN 与 PAN
 
 两者都位于 YOLOv5 的 Neck。
+
+![FPN 自顶向下与 PAN 自底向上的多尺度特征融合路径](images/yolo/fpn-pan-paths.png)
+
+*图：FPN 通过上采样把深层语义传向高分辨率层；PAN 再通过下采样把定位信息传回低分辨率层。*
 
 ### 10.1 FPN
 
