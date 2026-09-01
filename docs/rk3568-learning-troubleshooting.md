@@ -29,6 +29,8 @@
 | 摄像头 | OpenCV 依赖与取帧 | 已验证 |
 | C++ 构建 | 头文件、CMake、GCC 与交叉编译器 | 已解决并完成构建 |
 | 图像输入 | `int8` 与 `uint8` 类型不匹配 | 已定位并修改 |
+| RKNN C API | CMake 构建、通用 API 与零拷贝流程 | 已完成学习与板端验证 |
+| 实时检测 | 4 维输入、图形显示与返回值检查 | 已定位并解决 |
 
 ## 2. Ubuntu 未开启 SSH，连接被拒绝
 
@@ -361,6 +363,82 @@ adb push install /
 
 执行前应确认开发板已通过 ADB 正常连接，并确认目标路径具有写入权限。
 
+### `adb push` 传输失败的原因
+
+#### 1. 命令中缺少 `push`
+
+错误写法：
+
+```text
+adb <源路径> <目标路径>
+```
+
+ADB 会把源路径当成子命令，因此提示：
+
+```text
+unknown command
+```
+
+正确格式：
+
+```text
+adb push <本机源路径> <目标设备路径>
+```
+
+#### 2. 把绝对路径写成相对路径
+
+错误路径：
+
+```text
+./home/topeet/...
+```
+
+路径开头的 `.` 表示当前目录，所以该写法实际指向“当前目录下的 `home/topeet`”，并不是文件系统根目录下的 `/home/topeet`。
+
+正确的绝对路径应从 `/` 开始：
+
+```text
+/home/topeet/...
+```
+
+如果 ADB 在当前机器上找不到源文件或目录，会提示：
+
+```text
+cannot stat ... No such file or directory
+```
+
+#### 3. 没有区分本机复制与 ADB 传输
+
+同一台机器内复制文件或目录，应使用 `cp`：
+
+```bash
+cp -a <源目录> <目标目录>
+```
+
+向 ADB 连接的另一台设备传输，应使用 `adb push`：
+
+```text
+adb push <本机源路径> <目标设备路径>
+```
+
+本次传输示例：
+
+```bash
+adb devices
+
+adb push /home/topeet/rknn/06_yolov5_demo/02_toolkit_lite2 \
+  /home/topeet/project/
+```
+
+执行前先检查源目录是否存在，以及目标设备是否在线：
+
+```bash
+ls -ld /home/topeet/rknn/06_yolov5_demo/02_toolkit_lite2
+adb devices
+```
+
+核心原则：`adb push` 的第一个路径必须在执行 ADB 命令的当前机器上真实存在，第二个路径属于 ADB 连接的目标设备；Linux 绝对路径必须从 `/` 开始。
+
 ## 13. 图像输入使用 `int8` 导致数值异常
 
 ### 问题背景
@@ -396,7 +474,319 @@ output_attr[0].type = RKNN_TENSOR_FLOAT32;
 - 模型是否要求量化输入，以及对应的 scale/zero-point；
 - 输入尺寸和 `size_with_stride` 是否匹配。
 
-## 14. 快速命令索引
+## 14. RKNN 通用 C API：从构建到板端运行
+
+### 项目整体流程
+
+```text
+CMakeLists.txt + main.cc
+        ↓
+build.sh
+        ├─ cmake：读取 CMakeLists.txt，生成 Makefile
+        ├─ make：调用交叉编译器完成编译和链接
+        └─ make install：整理可执行文件、模型和运行库
+        ↓
+install/example_Linux/
+        ├─ example
+        ├─ model/
+        └─ lib/librknnrt.so
+        ↓
+推送到开发板并运行
+```
+
+本次交叉编译器位于：
+
+```text
+/usr/local/arm64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/
+```
+
+第三方依赖放在工程的 `3rdparty/` 目录，包括 RKNN API 和 OpenCV 的头文件与库。
+
+### CMake、Make 与编译器的职责
+
+```text
+CMakeLists.txt → cmake → Makefile → make → gcc/g++
+   构建配置       生成器              调度器   实际编译器
+```
+
+常用 CMake 指令：
+
+| 指令 | 作用 |
+|---|---|
+| `set(变量 值)` | 定义路径、架构等构建变量 |
+| `${变量}` | 读取变量值 |
+| `include_directories(...)` | 配置编译阶段的头文件搜索路径 |
+| `find_package(OpenCV)` | 查找 OpenCV 配置 |
+| `add_executable(目标 源文件...)` | 定义可执行程序 |
+| `target_link_libraries(...)` | 链接 RKNN Runtime、OpenCV 等库 |
+| `install(...)` | 定义发布目录中的安装规则 |
+
+编译阶段根据头文件声明检查“函数怎么用”并生成 `.o`；链接阶段在库中寻找“函数在哪里实现”。动态库 `.so` 在运行时仍需能够被加载，否则会出现：
+
+```text
+error while loading shared libraries: xxx.so
+```
+
+可以临时指定动态库目录：
+
+```bash
+export LD_LIBRARY_PATH=lib
+```
+
+更稳定的做法是在构建时设置相对运行路径：
+
+```cmake
+set(CMAKE_INSTALL_RPATH "$ORIGIN/lib")
+```
+
+其中 `$ORIGIN` 表示可执行文件所在目录。
+
+### CMake 安装规则
+
+`make` 负责编译和链接，`make install` 根据安装规则把产物整理到发布目录。`CMAKE_INSTALL_PREFIX` 是安装根目录，各个 `DESTINATION` 都以它为基准。
+
+```cmake
+install(TARGETS example DESTINATION ./)
+install(DIRECTORY model DESTINATION ./)
+install(PROGRAMS librknnrt.so DESTINATION lib)
+```
+
+三种安装对象分别对应：
+
+- `TARGETS`：CMake 构建出的目标；
+- `DIRECTORY`：已有目录及其内容；
+- `PROGRAMS`：已有文件，并赋予程序权限。
+
+### 板端运行
+
+把整个安装目录推送到开发板，进入目录后运行：
+
+```bash
+export LD_LIBRARY_PATH=lib
+./example model/RK3588/resnet18.rknn image.jpg
+```
+
+运行前可用 `file example` 检查文件格式和目标架构。当前目录下的程序要写成 `./example`；只写 `example` 时，Shell 会到 `PATH` 中查找。
+
+### RKNN 通用 API 主线
+
+```text
+1. rknn_init                         加载模型并创建会话
+2. rknn_query(IN_OUT_NUM)            查询输入输出数量
+3. OpenCV 读取并预处理图片
+4. rknn_inputs_set                   提交输入缓冲区
+5. rknn_run                          执行推理
+6. rknn_outputs_get                  获取输出
+7. 后处理                            解码、TopN 或 NMS
+8. rknn_outputs_release              释放输出缓冲区
+9. rknn_destroy                      销毁会话
+```
+
+核心调用示意：
+
+```cpp
+rknn_context context;
+rknn_init(&context, model_path, 0, 0, nullptr);
+
+rknn_input_output_num io_num;
+rknn_query(context, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
+
+rknn_inputs_set(context, 1, inputs);
+rknn_run(context, nullptr);
+rknn_outputs_get(context, io_num.n_output, outputs, nullptr);
+
+rknn_outputs_release(context, io_num.n_output, outputs);
+rknn_destroy(context);
+```
+
+当 `rknn_init` 的模型大小参数为 `0` 时，传入的 `model_path` 按模型文件路径解释。所有 RKNN API 的返回值都应检查，初始化失败后不能继续推理。
+
+资源释放遵循“谁分配，谁释放”：由 RKNN 分配的输出缓冲使用 `rknn_outputs_release`，会话使用 `rknn_destroy`。
+
+### 通用 API 与零拷贝
+
+| 项目 | 通用 API | 零拷贝 API |
+|---|---|---|
+| 输入内存 | 普通 CPU 内存，通过 `inputs[0].buf` 提交 | `rknn_create_mem` 创建共享内存 |
+| 数据提交 | `rknn_inputs_set` | `rknn_set_io_mem` |
+| 访问方式 | 结构体变量使用 `.` | 结构体指针使用 `->` |
+| 输出释放 | `rknn_outputs_release` | `rknn_destroy_mem` |
+
+零拷贝基本流程：
+
+```text
+rknn_query(INPUT_ATTR / OUTPUT_ATTR)
+        ↓
+rknn_create_mem(context, size_with_stride)
+        ↓
+memcpy(input_mem->virt_addr, image_data, ...)
+        ↓
+rknn_set_io_mem(context, memory, tensor_attr)
+        ↓
+rknn_run(context, NULL)
+```
+
+零拷贝省掉的是 CPU 内存与 NPU 可访问内存之间的一次复制，不会省掉图像预处理。申请内存时应使用 `size_with_stride`，因为它包含硬件对齐所需的填充空间。
+
+### 模型转换链条
+
+```text
+.pt（PyTorch）
+  ↓ torch.onnx.export
+.onnx（通用中间格式）
+  ↓ rknn-toolkit2：config → load → build → export_rknn
+.rknn（板端 RKNPU 模型）
+```
+
+启用量化时：
+
+```python
+rknn.build(do_quantization=True, dataset='dataset.txt')
+```
+
+量化数据集用于确定 INT8 量化参数。`.rknn` 是否采用 INT8 不能只根据扩展名判断，应以实际转换配置和张量属性为准。
+
+### YOLOv5 通用 API 检测流程
+
+```text
+解析 model/image 参数
+→ rknn_init
+→ 查询输入输出数量
+→ imread、BGR→RGB、letterbox
+→ rknn_inputs_set(UINT8 / NHWC)
+→ rknn_run
+→ rknn_outputs_get（三个检测头）
+→ 解码、置信度过滤、分类别 NMS
+→ 坐标映射回原图并绘制
+→ 释放输出和会话
+```
+
+YOLOv5 的三个检测头负责不同尺度：
+
+| 特征图 | stride | 主要目标尺度 |
+|---|---:|---|
+| `80×80` | 8 | 小目标 |
+| `40×40` | 16 | 中目标 |
+| `20×20` | 32 | 大目标 |
+
+`stride` 是输入尺寸与特征图尺寸之比，不是卷积操作。使用 letterbox 时，检测框从模型输入坐标映射回原图，需要先减去补边，再除以缩放比例；不同类别的框不应互相做 NMS 抑制。
+
+## 15. RKNN C API 与实时检测问题记录
+
+### `Exec format error`
+
+#### 现象与原因
+
+执行 `bash xxx.tar.gz` 时提示：
+
+```text
+cannot execute binary file: Exec format error
+```
+
+压缩包不是 Shell 脚本或可执行程序，应解压而不是执行。
+
+#### 解决办法
+
+```bash
+tar -xzf package.tar.gz
+tar -xJf package.tar.xz
+```
+
+### `chmod -777` 导致脚本失去权限
+
+`chmod -777 build.sh` 中的 `-` 表示移除权限，会导致脚本失去读、写和执行权限。只增加执行权限应使用：
+
+```bash
+chmod +x build.sh
+```
+
+不建议日常使用 `chmod 777`，应只授予实际需要的权限。
+
+### SSH 运行 OpenCV 无法弹出窗口
+
+#### 问题现象
+
+```text
+qt.qpa.xcb: could not connect to display
+```
+
+SSH 会话默认没有图形显示环境。若开发板的本地桌面正在 `:0` 显示器运行，可以尝试：
+
+```bash
+export DISPLAY=:0
+```
+
+如果没有可用的图形桌面，应改用 `cv2.imwrite` 保存结果，或通过其他方式传回主机查看。
+
+### RKNNLite 输入维度不足
+
+#### 问题现象
+
+```text
+The input[0] need 4dims input, but 3dims input buffer feed
+```
+
+模型需要带 batch 维度的 4 维输入，而实际只传入 `[640, 640, 3]`。推理时临时补充 batch 维度：
+
+```python
+input_data = np.expand_dims(image, 0)
+outputs = rknn_lite.inference(inputs=[input_data])
+```
+
+不要直接把后续还要交给 OpenCV 绘图的 `image` 改成 4 维，否则 `cv2.cvtColor` 等接口可能因维度不符而失败。
+
+### 未检查 `load_rknn` 或 `init_runtime` 返回值
+
+初始化失败后继续执行，可能出现：
+
+```text
+Runtime environment is not inited, please call init_runtime to init it first!
+```
+
+每一步都应检查返回值，并在失败时立即退出：
+
+```python
+ret = rknn_lite.load_rknn(model_path)
+if ret != 0:
+    raise RuntimeError(f'load_rknn failed: {ret}')
+
+ret = rknn_lite.init_runtime()
+if ret != 0:
+    raise RuntimeError(f'init_runtime failed: {ret}')
+```
+
+### `cv2.imwrite` 没有写入权限
+
+程序在 `/` 等普通用户不可写目录运行时，保存图片可能提示 `permission denied`。应把结果保存到当前用户有写权限的目录，例如：
+
+```python
+cv2.imwrite('/home/topeet/result.jpg', result_image)
+```
+
+不应为了保存结果而直接使用 `sudo` 运行整个推理程序。
+
+### ADB 找不到设备
+
+#### 问题现象
+
+```text
+no devices/emulators found
+```
+
+ADB 使用 USB 通道，SSH 使用网络通道，两者互相独立；SSH 能连接不代表 ADB 已连接。
+
+依次检查：
+
+```bash
+adb devices
+adb kill-server
+adb start-server
+adb devices
+```
+
+只有状态为 `device` 才表示设备已经连接并可用；`unauthorized` 和 `offline` 都需要继续处理。若列表为空，应检查 USB 数据线、接口、板端状态，并在开发板重启后等待 ADB 服务恢复。
+
+## 16. 快速命令索引
 
 ### SSH
 
@@ -441,10 +831,18 @@ sudo tar -xzf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.gz \
 ### ADB
 
 ```bash
+adb devices
 adb push install /
 ```
 
-## 15. 待办事项
+### RKNN 程序运行
+
+```bash
+export LD_LIBRARY_PATH=lib
+./example model/RK3588/resnet18.rknn image.jpg
+```
+
+## 17. 待办事项
 
 - 更新或核对 RKNN Runtime 与 NPU 驱动版本；
 - 核对模型输入尺寸与 RKNN 输入缓冲区大小；
