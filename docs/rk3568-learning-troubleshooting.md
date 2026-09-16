@@ -26,6 +26,7 @@
 | 开发板连接 | 串口与 USB 设备识别 | 已连接成功 |
 | 板端网络 | Wi-Fi、SSH 与文件传输 | 已验证 |
 | RKNN | 环境部署、Runtime/NPU 版本 | 环境可用，版本更新待处理 |
+| Toolkit2 / NumPy 安装 | 旧版教程与 2.3.2 安装材料混用 | 已核对版本要求，学生具体报错及修复结果待确认 |
 | 摄像头 | OpenCV 依赖与取帧 | 已验证 |
 | C++ 构建 | 头文件、CMake、GCC 与交叉编译器 | 已解决并完成构建 |
 | 图像输入 | `int8` 与 `uint8` 类型不匹配 | 已定位并修改 |
@@ -234,6 +235,67 @@ source ~/.bashrc
 原记录提出“板端是否需要配置国内软件源”的问题，但没有完成验证，因此暂不写成配置建议。
 
 ## 8. RKNN 环境与推理记录
+
+### Toolkit2 2.3.2 安装时混用旧教程的 NumPy 步骤
+
+#### 问题现象与适用环境
+
+课堂上部分同学在 Ubuntu 虚拟机的 Conda 环境中安装 NumPy 失败。目前尚未收集具体报错，不能直接认定所有失败都由版本问题引起。
+
+本次核对的实际材料为：
+
+- Python 3.8；
+- `requirements_cp38-2.3.2.txt`；
+- `rknn_toolkit2-2.3.2-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`。
+
+其中 `cp38` 对应 CPython 3.8，`x86_64` 对应电脑上的 Linux 虚拟机；这不是 RK3568 ARM 板端的 Toolkit Lite2 安装包。
+
+#### 已确认的文档差异
+
+迅为 2023 年教程截图使用 Toolkit2 1.4.0 和 `requirements_cp38-1.4.0.txt`，先执行 `pip install numpy==1.16.6`。截图显示该步骤下载 `.zip` 源码包并执行 `Building wheel`，随后安装依赖文件时又下载 NumPy 1.19.5 的 Python 3.8 预编译包。
+
+但本次提供的 2.3.2 依赖文件实际要求为：
+
+```text
+numpy<=1.26.4
+opencv-python>=4.5.5.64
+```
+
+因此不应照搬旧教程中单独安装 `numpy==1.16.6` 的步骤，应由配套依赖文件统一安装。文件也已包含 OpenCV，无需另行安装最新版。`numpy<=1.26.4` 是上限，不代表 Python 3.8 必须安装 1.26.4；安装器还会结合 Python 版本及其他依赖选择兼容版本。
+
+源码编译可能受编译工具和构建依赖影响，是需要检查的方向，但不是已经确认的学生报错原因。
+
+#### 建议安装顺序（待课堂验证）
+
+以下操作在 Ubuntu x86_64 虚拟机中执行，不在开发板上执行。先进入同时存放依赖文件和安装包的目录。
+
+```bash
+# 已有 rknn 环境时不要重复创建；先确认 Python 为 3.8
+conda activate rknn
+python --version
+python -m pip --version
+
+# 安装 2.3.2 配套依赖，不先安装 numpy==1.16.6
+python -m pip install -r requirements_cp38-2.3.2.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 上一步成功后安装配套 Toolkit2
+python -m pip install ./rknn_toolkit2-2.3.2-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 检查依赖关系、版本和导入
+python -m pip check
+python -c "import sys, numpy, cv2; from rknn.api import RKNN; print(sys.executable); print('NumPy:', numpy.__version__); print('OpenCV:', cv2.__version__); print('RKNN import OK')"
+```
+
+每一步成功后再继续。导入成功只说明基础环境可以加载，仍需运行课堂模型构建与模拟推理例程进行功能验证。已经能够正常运行的环境不要仅因本记录而重装。
+
+#### 待补充的排查证据
+
+- 失败时执行的完整命令及报错日志，尤其是最后的错误信息；
+- `python --version`、`python -m pip --version` 的输出；
+- 是否已激活正确环境，以及实际使用的依赖文件和安装包版本；
+- 按配套材料安装后的导入、依赖检查及例程运行结果。
+
+当前状态：已确认旧教程与实际材料的版本差异；具体安装失败原因及修复效果尚未验证。
 
 ### 环境部署
 
